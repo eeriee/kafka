@@ -764,19 +764,20 @@ public class RecordAccumulator {
                 // Note that entries are currently not removed from batches when deque is empty.
                 unknownLeaderTopics.add(part.topic());
             } else {
-                if (queueSizes != null)
+                if (queueSizes != null) {
                     queueSizes[queueSizesIndex] = dequeSize;
-                if (partitionAvailabilityTimeoutMs > 0) {
-                    // Check if we want to exclude the partition from the list of available partitions
-                    // if the broker hasn't responded for some time.
-                    NodeLatencyStats nodeLatencyStats = nodeStats.get(leader.id());
-                    if (nodeLatencyStats != null) {
-                        // NOTE: there is no synchronization between reading metrics,
-                        // so we read ready time first to avoid accidentally marking partition
-                        // unavailable if we read while the metrics are being updated.
-                        long readyTimeMs = nodeLatencyStats.readyTimeMs;
-                        if (readyTimeMs - nodeLatencyStats.drainTimeMs > partitionAvailabilityTimeoutMs)
-                            --queueSizesIndex;
+                    if (partitionAvailabilityTimeoutMs > 0) {
+                        // Check if we want to exclude the partition from the list of available partitions
+                        // if the broker hasn't responded for some time.
+                        NodeLatencyStats nodeLatencyStats = nodeStats.get(leader.id());
+                        if (nodeLatencyStats != null) {
+                            // NOTE: there is no synchronization between reading metrics,
+                            // so we read ready time first to avoid accidentally marking partition
+                            // unavailable if we read while the metrics are being updated.
+                            long readyTimeMs = nodeLatencyStats.readyTimeMs;
+                            if (readyTimeMs - nodeLatencyStats.drainTimeMs > partitionAvailabilityTimeoutMs)
+                                --queueSizesIndex;
+                        }
                     }
                 }
 
