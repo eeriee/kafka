@@ -317,7 +317,8 @@ public class RecordAccumulator {
                 setPartition(callbacks, effectivePartition);
 
                 // check if we have an in-progress batch
-                Deque<ProducerBatch> dq = topicInfo.batches.computeIfAbsent(effectivePartition, k -> new ArrayDeque<>());
+                TopicPartition tp = new TopicPartition(topic, effectivePartition);
+                Deque<ProducerBatch> dq = topicInfo.batches.computeIfAbsent(tp, k -> new ArrayDeque<>());
                 synchronized (dq) {
                     // After taking the lock, validate that the partition hasn't changed and retry.
                     if (partitionChanged(topic, topicInfo, partitionInfo, dq, nowMs, cluster))
@@ -346,7 +347,7 @@ public class RecordAccumulator {
                         continue;
 
                     final ByteBuffer batchBuffer = buffer;
-                    RecordAppendResult appendResult = appendNewBatch(topic, effectivePartition, dq, timestamp, key, value, headers, callbacks,
+                    RecordAppendResult appendResult = appendNewBatch(tp, dq, timestamp, key, value, headers, callbacks,
                             () -> MemoryRecords.builder(batchBuffer, RecordBatch.CURRENT_MAGIC_VALUE, compression, TimestampType.CREATE_TIME, 0L),
                             nowMs);
                     // Set buffer to null, so that deallocate doesn't return it back to free pool, since it's used in the batch.
@@ -385,8 +386,7 @@ public class RecordAccumulator {
     /**
      * Append a new batch to the queue
      *
-     * @param topic The topic
-     * @param partition The partition (cannot be RecordMetadata.UNKNOWN_PARTITION)
+     * @param tp The topic-partition (cannot be RecordMetadata.UNKNOWN_PARTITION)
      * @param dq The queue
      * @param timestamp The timestamp of the record
      * @param key The key for the record
@@ -404,8 +404,7 @@ public class RecordAccumulator {
      *         a concurrent appender created an extendable open batch, but the new record doesn't fit in,
      *         so the caller releases its pre-allocated buffer and retries via the extension path.
      */
-    protected RecordAppendResult appendNewBatch(String topic,
-                                                int partition,
+    protected RecordAppendResult appendNewBatch(TopicPartition tp,
                                                 Deque<ProducerBatch> dq,
                                                 long timestamp,
                                                 byte[] key,
@@ -414,7 +413,7 @@ public class RecordAccumulator {
                                                 AppendCallbacks callbacks,
                                                 Supplier<MemoryRecordsBuilder> recordsBuilderSupplier,
                                                 long nowMs) {
-        assert partition != RecordMetadata.UNKNOWN_PARTITION;
+        assert tp.partition() != RecordMetadata.UNKNOWN_PARTITION;
 
         RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callbacks, dq, nowMs);
         if (!appendResult.needsNewBatch()) {
@@ -426,7 +425,7 @@ public class RecordAccumulator {
         }
 
         MemoryRecordsBuilder recordsBuilder = recordsBuilderSupplier.get();
-        ProducerBatch batch = createProducerBatch(new TopicPartition(topic, partition), recordsBuilder, nowMs);
+        ProducerBatch batch = createProducerBatch(tp, recordsBuilder, nowMs);
         FutureRecordMetadata future = Objects.requireNonNull(batch.tryAppend(timestamp, key, value, headers,
                 callbacks, nowMs));
 
@@ -693,7 +692,7 @@ public class RecordAccumulator {
     private long partitionReady(MetadataSnapshot metadataSnapshot, long nowMs, String topic,
                                 TopicInfo topicInfo,
                                 long nextReadyCheckDelayMs, Set<Node> readyNodes, Set<String> unknownLeaderTopics) {
-        ConcurrentMap<Integer, Deque<ProducerBatch>> batches = topicInfo.batches;
+        ConcurrentMap<TopicPartition, Deque<ProducerBatch>> batches = topicInfo.batches;
         // Collect the queue sizes for available partitions to be used in adaptive partitioning.
         int[] queueSizes = null;
         int[] partitionIds = null;
@@ -711,8 +710,8 @@ public class RecordAccumulator {
 
         int queueSizesIndex = -1;
         boolean exhausted = this.free.queued() > 0;
-        for (Map.Entry<Integer, Deque<ProducerBatch>> entry : batches.entrySet()) {
-            TopicPartition part = new TopicPartition(topic, entry.getKey());
+        for (Map.Entry<TopicPartition, Deque<ProducerBatch>> entry : batches.entrySet()) {
+            TopicPartition part = entry.getKey();
             // Advance queueSizesIndex so that we properly index available
             // partitions.  Do it here so that it's done for all code paths.
 
@@ -1058,7 +1057,7 @@ public class RecordAccumulator {
         TopicInfo topicInfo = topicInfoMap.get(tp.topic());
         if (topicInfo == null)
             return null;
-        return topicInfo.batches.get(tp.partition());
+        return topicInfo.batches.get(tp);
     }
 
     /**
@@ -1066,7 +1065,7 @@ public class RecordAccumulator {
      */
     private Deque<ProducerBatch> getOrCreateDeque(TopicPartition tp) {
         TopicInfo topicInfo = topicInfoFor(tp.topic());
-        return topicInfo.batches.computeIfAbsent(tp.partition(), k -> new ArrayDeque<>());
+        return topicInfo.batches.computeIfAbsent(tp, k -> new ArrayDeque<>());
     }
 
     BuiltInPartitioner createBuiltInPartitioner(LogContext logContext, String topic, int stickyBatchSize, boolean rackAware, String rack) {
@@ -1400,7 +1399,7 @@ public class RecordAccumulator {
      * Per topic info.
      */
     protected static class TopicInfo {
-        public final ConcurrentMap<Integer /*partition*/, Deque<ProducerBatch>> batches = new CopyOnWriteMap<>();
+        public final ConcurrentMap<TopicPartition, Deque<ProducerBatch>> batches = new CopyOnWriteMap<>();
         public final BuiltInPartitioner builtInPartitioner;
 
         public TopicInfo(BuiltInPartitioner builtInPartitioner) {
